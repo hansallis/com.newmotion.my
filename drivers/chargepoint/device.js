@@ -77,7 +77,7 @@ class Chargepoint extends Homey.Device {
     start_update_loop() {
         this._timer = setInterval(() => {
             this.updateDevice();
-        }, 60000); //1 minute
+        }, 15000); //15 seconds
     }
 
     async updateDevice() {
