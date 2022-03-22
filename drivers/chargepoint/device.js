@@ -7,9 +7,10 @@ const CP = require('./chargepoint')
 class Chargepoint extends Homey.Device {
 
     async onInit() {
+        await this.setupDeviceSettings();
         // register a capability listener
         this.registerCapabilityListener('onoff', this.onCapabilityOnoff.bind(this));
-        this.setupDeviceSettings();
+
         this.updateDevice();
         this.start_update_loop();
         this.setAvailable();
@@ -23,18 +24,23 @@ class Chargepoint extends Homey.Device {
         this._conditionActiveChargeForCard = this.homey.flow.getConditionCard('charging_state_card');
         this.setupConditionActiveChargeForCard();   
         this._conditionActiveChargeForCardCar = this.homey.flow.getConditionCard('charging_state_generic');
-        this.setupConditionActiveChargeForCardCar();   
+        this.setupConditionActiveChargeForCardCar();
+        //This version introduces the active card capability so add it to existing devices
+        if(!this.hasCapability('active_card'))
+            await this.addCapability('active_card');  
     }
 
     setupDeviceSettings()
     {
         let storedCard = this.getStoreValue('card');
-        if(!storedCard)
+        console.log('known card: '+JSON.stringify(storedCard))
+        if(storedCard == null)
         {
             console.log('The store did not hold a card yet, grab it from device data');
             this.setStoreValue('card',this.getData().deviceSettings.card);
             this.setStoreValue('car',this.getData().deviceSettings.car);
             storedCard = this.getStoreValue('card');
+            console.log('now known card: '+JSON.stringify(storedCard))
         }
         this.setSettings({
             charge_card:this.getStoreValue('card').formattedName,
@@ -49,7 +55,7 @@ class Chargepoint extends Homey.Device {
         console.info('turn charging '+value)
         if(value)
         {
-            await MNM.startSession(this.getData().id,this.getData().deviceSettings.card.rfid, this.homey.settings.get('user_email'),this.homey.settings.get('user_password'))
+            await MNM.startSession(this.getData().id,this.getStoreValue('card').rfid, this.homey.settings.get('user_email'),this.homey.settings.get('user_password'))
             await this.delay(10000)
         }
         else
@@ -84,8 +90,13 @@ class Chargepoint extends Homey.Device {
         const settings = this.getSettings()
         const id = this.getData().id
         const serial = this.getData().serial
-        
-        const data = CP.enhance(await MNM(id, await MNM.getAuthCookie(this.homey.settings.get('user_email'),this.homey.settings.get('user_password'))))
+        let fresh_token = await MNM.getAuthCookie(this.homey.settings.get('user_email'),this.homey.settings.get('user_password'))
+        if(fresh_token=='')
+        {
+            console.log('could not update device state due to no fresh token available')
+            return
+        }
+        const data = CP.enhance(await MNM(id, fresh_token))
         //console.log(JSON.stringify(data));
         console.debug('get previous status from cache');
         const prev = this.getStoreValue('cache')
@@ -113,8 +124,9 @@ class Chargepoint extends Homey.Device {
             } else if (prev.e.free<prev.e.total && data.e.total == data.e.free) {
                 this.driver.ready().then(() => {
                     console.log('Trigger stop event, all connectors are now free.');
+                    //Grab the used carge card from our prev object, the current non chargting state has no longer an card object
                     this.driver.triggerStop( this, {
-                        cardname:data.e.cardname,
+                        cardname:prev.e.cardname,
                         carname:this.getStoreValue('car').name
                     }, {} );
                 });
@@ -137,8 +149,9 @@ class Chargepoint extends Homey.Device {
             if(prev.e.charging > data.e.charging) {
                 this.driver.ready().then(() => {
                     console.log('Trigger charging completed event, a connector is no longer charging.');
+                    //Grab the used carge card from our prev object, the current non chargting state has no longer an card object
                     this.driver.triggerCompleted( this, {
-                        cardname:data.e.cardname,
+                        cardname:prev.e.cardname,
                         carname:this.getStoreValue('car').name
                     }, {} );
                 });
